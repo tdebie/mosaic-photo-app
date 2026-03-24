@@ -7,6 +7,7 @@ Client-side web app for generating a printable photo mosaic.
 - Upload one master image and up to 200 source images (including folder selection via `webkitdirectory`).
 - Configure print size (cm), DPI, and tile size range (cm).
 - Print-size presets are proportional to the master aspect ratio, with a 300 DPI max-size hint from master resolution.
+- Optional overlap % introduces controlled tile overlap/jitter for a more chaotic look while preserving full coverage.
 - Estimate a safe source-image downsample limit from final print resolution + tile sizing + available source count.
 - Compute per-photo stats used for matching:
   - Average RGB color

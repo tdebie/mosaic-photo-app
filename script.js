@@ -19,6 +19,7 @@ const els = {
   tileMin: document.getElementById('tileMin'),
   tileMax: document.getElementById('tileMax'),
   varyTileSize: document.getElementById('varyTileSize'),
+  overlapPct: document.getElementById('overlapPct'),
   resolutionHint: document.getElementById('resolutionHint'),
   mode: document.getElementById('mode'),
   matchTolerance: document.getElementById('matchTolerance'),
@@ -53,11 +54,12 @@ function getSettings() {
   const tileMinCm = parseFloat(els.tileMin.value) || 1.2;
   const tileMaxCm = Math.max(tileMinCm, parseFloat(els.tileMax.value) || 2.5);
   const vary = els.varyTileSize.checked;
+  const overlapPct = clamp(parseFloat(els.overlapPct.value) || 0, 0, 30);
   const pxW = Math.round((widthCm / 2.54) * dpi);
   const pxH = Math.round((heightCm / 2.54) * dpi);
   const tileMinPx = Math.max(8, Math.round((tileMinCm / 2.54) * dpi));
   const tileMaxPx = Math.max(tileMinPx, Math.round((tileMaxCm / 2.54) * dpi));
-  return { widthCm, heightCm, dpi, tileMinCm, tileMaxCm, pxW, pxH, tileMinPx, tileMaxPx, vary };
+  return { widthCm, heightCm, dpi, tileMinCm, tileMaxCm, pxW, pxH, tileMinPx, tileMaxPx, vary, overlapPct };
 }
 
 function updatePrintPreset() {
@@ -651,6 +653,23 @@ function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance, 
   outputCtx.drawImage(tile, dx, dy, dw, dh);
 }
 
+function getJitteredDrawRect(x, y, w, h, overlapPct) {
+  if (overlapPct <= 0) return { dx: x, dy: y, dw: w, dh: h };
+  const overlap = overlapPct / 100;
+  const dw = w * (1 + overlap);
+  const dh = h * (1 + overlap);
+  const slackX = dw - w;
+  const slackY = dh - h;
+  const jitterX = (Math.random() * 2 - 1) * slackX * 0.35;
+  const jitterY = (Math.random() * 2 - 1) * slackY * 0.35;
+  let dx = x - slackX / 2 + jitterX;
+  let dy = y - slackY / 2 + jitterY;
+  // Keep original tile footprint fully covered.
+  dx = clamp(dx, x - slackX, x);
+  dy = clamp(dy, y - slackY, y);
+  return { dx, dy, dw, dh };
+}
+
 async function generateMosaic() {
   if (!state.masterImage || state.sourcePhotos.length === 0) {
     els.generateStatus.textContent = 'Please load a master image and at least one source photo.';
@@ -707,7 +726,17 @@ async function generateMosaic() {
         }
         const photo = pickPhoto(tileStats, settings);
         if (photo) {
-          drawPhotoAdjusted(photo, x, y, w, h, tileStats, adjustTolerance, outputAllowMask);
+          const drawRect = getJitteredDrawRect(x, y, w, h, settings.overlapPct);
+          drawPhotoAdjusted(
+            photo,
+            drawRect.dx,
+            drawRect.dy,
+            drawRect.dw,
+            drawRect.dh,
+            tileStats,
+            adjustTolerance,
+            outputAllowMask
+          );
           photo.usedCount += 1;
         } else {
           skipped += 1;
@@ -795,7 +824,7 @@ function initMaskPainting() {
 }
 
 els.printPreset.addEventListener('change', updatePrintPreset);
-[els.dpi, els.tileMin, els.tileMax, els.varyTileSize].forEach((el) => {
+[els.dpi, els.tileMin, els.tileMax, els.varyTileSize, els.overlapPct].forEach((el) => {
   el.addEventListener('input', updateResolutionHint);
 });
 els.printWidth.addEventListener('input', () => {
