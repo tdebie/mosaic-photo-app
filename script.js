@@ -20,6 +20,7 @@ const els = {
   tileMax: document.getElementById('tileMax'),
   varyTileSize: document.getElementById('varyTileSize'),
   overlapPct: document.getElementById('overlapPct'),
+  rotationDeg: document.getElementById('rotationDeg'),
   resolutionHint: document.getElementById('resolutionHint'),
   mode: document.getElementById('mode'),
   matchTolerance: document.getElementById('matchTolerance'),
@@ -57,11 +58,12 @@ function getSettings() {
   const tileMaxCm = Math.max(tileMinCm, parseFloat(els.tileMax.value) || 2.5);
   const vary = els.varyTileSize.checked;
   const overlapPct = clamp(parseFloat(els.overlapPct.value) || 0, 0, 30);
+  const rotationDeg = clamp(parseFloat(els.rotationDeg.value) || 0, 0, 8);
   const pxW = Math.round((widthCm / 2.54) * dpi);
   const pxH = Math.round((heightCm / 2.54) * dpi);
   const tileMinPx = Math.max(8, Math.round((tileMinCm / 2.54) * dpi));
   const tileMaxPx = Math.max(tileMinPx, Math.round((tileMaxCm / 2.54) * dpi));
-  return { widthCm, heightCm, dpi, tileMinCm, tileMaxCm, pxW, pxH, tileMinPx, tileMaxPx, vary, overlapPct };
+  return { widthCm, heightCm, dpi, tileMinCm, tileMaxCm, pxW, pxH, tileMinPx, tileMaxPx, vary, overlapPct, rotationDeg };
 }
 
 function updatePrintPreset() {
@@ -471,7 +473,8 @@ function getTileStatsFromMasterMasked(srcX, srcY, srcW, srcH, sampleCtx, outputA
     for (let x = 0; x < srcW; x++) {
       const ox = Math.min(canvasW - 1, srcX + x);
       const oy = Math.min(canvasH - 1, srcY + y);
-      if (outputAllowMask[oy * canvasW + ox] !== 1) {
+      const alpha = outputAllowMask[oy * canvasW + ox];
+      if (alpha <= 0.02) {
         i += 4;
         continue;
       }
@@ -479,12 +482,12 @@ function getTileStatsFromMasterMasked(srcX, srcY, srcW, srcH, sampleCtx, outputA
       const gg = block[i + 1];
       const bb = block[i + 2];
       const hsv = rgbToHsv(rr, gg, bb);
-      r += rr;
-      g += gg;
-      b += bb;
-      s += hsv.s;
-      v += hsv.v;
-      n++;
+      r += rr * alpha;
+      g += gg * alpha;
+      b += bb * alpha;
+      s += hsv.s * alpha;
+      v += hsv.v * alpha;
+      n += alpha;
       i += 4;
     }
   }
@@ -626,47 +629,52 @@ function smoothBinaryMap(source, w, h) {
 
 function mapAllowsMosaic(x, y, w, h, decision) {
   if (!decision) return true;
-  let includeVotes = 0;
-
-  const sx = Math.max(0, Math.floor((x / els.outputCanvas.width) * decision.mapW));
-  const sy = Math.max(0, Math.floor((y / els.outputCanvas.height) * decision.mapH));
-  const ex = Math.min(decision.mapW - 1, Math.floor(((x + w) / els.outputCanvas.width) * decision.mapW));
-  const ey = Math.min(decision.mapH - 1, Math.floor(((y + h) / els.outputCanvas.height) * decision.mapH));
-
-  for (let py = sy; py <= ey; py++) {
-    for (let px = sx; px <= ex; px++) {
-      const val = decision.map[py * decision.mapW + px];
-      if (val === 1) includeVotes++;
-    }
-  }
-  return includeVotes > 0;
+  return true;
 }
 
-function buildOutputAllowMask(settings, decision) {
-  const mask = new Uint8Array(settings.pxW * settings.pxH);
+function bilinearMaskSample(fx, fy) {
+  const w = els.maskCanvas.width;
+  const h = els.maskCanvas.height;
+  const x0 = clamp(Math.floor(fx), 0, w - 1);
+  const y0 = clamp(Math.floor(fy), 0, h - 1);
+  const x1 = clamp(x0 + 1, 0, w - 1);
+  const y1 = clamp(y0 + 1, 0, h - 1);
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const v00 = state.mask[y0 * w + x0] === 1 ? 1 : 0;
+  const v10 = state.mask[y0 * w + x1] === 1 ? 1 : 0;
+  const v01 = state.mask[y1 * w + x0] === 1 ? 1 : 0;
+  const v11 = state.mask[y1 * w + x1] === 1 ? 1 : 0;
+  const top = v00 * (1 - tx) + v10 * tx;
+  const bottom = v01 * (1 - tx) + v11 * tx;
+  return top * (1 - ty) + bottom * ty;
+}
+
+function buildOutputAllowMask(settings) {
+  const mask = new Float32Array(settings.pxW * settings.pxH);
   for (let y = 0; y < settings.pxH; y++) {
-      const my = Math.min(decision.mapH - 1, Math.floor((y / settings.pxH) * decision.mapH));
+    const sy = (y / settings.pxH) * (els.maskCanvas.height - 1);
     for (let x = 0; x < settings.pxW; x++) {
-      const mx = Math.min(decision.mapW - 1, Math.floor((x / settings.pxW) * decision.mapW));
-      mask[y * settings.pxW + x] = decision.map[my * decision.mapW + mx];
+      const sx = (x / settings.pxW) * (els.maskCanvas.width - 1);
+      mask[y * settings.pxW + x] = bilinearMaskSample(sx, sy);
     }
   }
-
-  if (state.mask) {
-    for (let y = 0; y < settings.pxH; y++) {
-      const sy = Math.min(els.maskCanvas.height - 1, Math.floor((y / settings.pxH) * els.maskCanvas.height));
-      for (let x = 0; x < settings.pxW; x++) {
-        const sx = Math.min(els.maskCanvas.width - 1, Math.floor((x / settings.pxW) * els.maskCanvas.width));
-        const paintVal = state.mask[sy * els.maskCanvas.width + sx];
-        mask[y * settings.pxW + x] = paintVal === 1 ? 1 : 0;
-      }
-    }
-  }
-
   return mask;
 }
 
-function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance, outputAllowMask) {
+function tileHasCoverage(x, y, w, h, allowMask, canvasW, canvasH) {
+  const step = Math.max(1, Math.floor(Math.min(w, h) / 8));
+  for (let py = y; py < y + h; py += step) {
+    for (let px = x; px < x + w; px += step) {
+      const ox = Math.min(canvasW - 1, Math.floor(px));
+      const oy = Math.min(canvasH - 1, Math.floor(py));
+      if (allowMask[oy * canvasW + ox] > 0.08) return true;
+    }
+  }
+  return false;
+}
+
+function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance, outputAllowMask, rotationDeg) {
   const tile = document.createElement('canvas');
   tile.width = Math.max(1, Math.round(dw));
   tile.height = Math.max(1, Math.round(dh));
@@ -681,7 +689,12 @@ function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance, 
     sh = Math.round(photo.canvas.width / dstRatio);
     sy = Math.floor((photo.canvas.height - sh) / 2);
   }
-  tileCtx.drawImage(photo.canvas, sx, sy, sw, sh, 0, 0, tile.width, tile.height);
+  const angleRad = ((Math.random() * 2 - 1) * rotationDeg * Math.PI) / 180;
+  tileCtx.save();
+  tileCtx.translate(tile.width / 2, tile.height / 2);
+  tileCtx.rotate(angleRad);
+  tileCtx.drawImage(photo.canvas, sx, sy, sw, sh, -tile.width / 2, -tile.height / 2, tile.width, tile.height);
+  tileCtx.restore();
   const imageData = tileCtx.getImageData(0, 0, tile.width, tile.height);
   const data = imageData.data;
   const satDiff = targetStats.saturation - photo.stats.saturation;
@@ -714,8 +727,8 @@ function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance, 
     const localY = Math.floor(p / tile.width);
     const ox = Math.min(els.outputCanvas.width - 1, Math.floor(dx + localX));
     const oy = Math.min(els.outputCanvas.height - 1, Math.floor(dy + localY));
-    const allowed = outputAllowMask[oy * els.outputCanvas.width + ox] === 1;
-    if (!allowed) data[i + 3] = 0;
+    const allowedAlpha = outputAllowMask[oy * els.outputCanvas.width + ox];
+    data[i + 3] = Math.round(data[i + 3] * allowedAlpha);
   }
   tileCtx.putImageData(imageData, 0, 0);
   outputCtx.drawImage(tile, dx, dy, dw, dh);
@@ -757,8 +770,7 @@ async function generateMosaic() {
   masterCanvas.height = settings.pxH;
   const masterCtx = masterCanvas.getContext('2d');
   masterCtx.drawImage(state.masterImage, 0, 0, settings.pxW, settings.pxH);
-  const decision = createDecisionMap(settings, masterCtx);
-  const outputAllowMask = buildOutputAllowMask(settings, decision);
+  const outputAllowMask = buildOutputAllowMask(settings);
 
   let y = 0;
   let tiles = 0;
@@ -778,7 +790,7 @@ async function generateMosaic() {
       const w = Math.min(tileW, settings.pxW - x);
       const h = Math.min(rowH, settings.pxH - y);
 
-      if (mapAllowsMosaic(x, y, w, h, decision)) {
+      if (tileHasCoverage(x, y, w, h, outputAllowMask, settings.pxW, settings.pxH)) {
         const tileStats = getTileStatsFromMasterMasked(
           x,
           y,
@@ -804,7 +816,8 @@ async function generateMosaic() {
             drawRect.dh,
             tileStats,
             adjustTolerance,
-            outputAllowMask
+            outputAllowMask,
+            settings.rotationDeg
           );
           photo.usedCount += 1;
           placements.push({ x: drawRect.dx, y: drawRect.dy, w: drawRect.dw, h: drawRect.dh, photoId: photo.id });
@@ -894,7 +907,7 @@ function initMaskPainting() {
 }
 
 els.printPreset.addEventListener('change', updatePrintPreset);
-[els.dpi, els.tileMin, els.tileMax, els.varyTileSize, els.overlapPct].forEach((el) => {
+[els.dpi, els.tileMin, els.tileMax, els.varyTileSize, els.overlapPct, els.rotationDeg].forEach((el) => {
   el.addEventListener('input', updateResolutionHint);
 });
 els.printWidth.addEventListener('input', () => {

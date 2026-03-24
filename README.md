@@ -8,6 +8,7 @@ Client-side web app for generating a printable photo mosaic.
 - Configure print size (cm), DPI, and tile size range (cm).
 - Print-size presets are proportional to the master aspect ratio, with a 300 DPI max-size hint from master resolution.
 - Optional overlap % introduces controlled tile overlap/jitter for a more chaotic look while preserving full coverage.
+- Optional rotation (± degrees) adds small random tile rotations for extra randomness.
 - Estimate a safe source-image downsample limit from final print resolution + tile sizing + available source count.
 - Compute per-photo stats used for matching:
   - Average RGB color
@@ -23,6 +24,7 @@ Client-side web app for generating a printable photo mosaic.
 - Color-range masking tool can paint either inclusion or exclusion directly into the active mask.
 - Smooth-mask tool removes small include/exclude islands up to a configured size (applied on demand).
 - Boundary smoothing tool reduces staircase/jagged edges on include/exclude borders.
+- Mask edges are sampled with soft interpolation into output resolution for smoother inclusion/exclusion transitions.
 - Boundary-safe compositing: tiles are alpha-cut at inclusion/exclusion edges so excluded regions remain true master-photo pixels.
 - Edge-aware matching: color stats for edge tiles are computed only from actually visible (non-clipped) pixels.
 - Tile placement preserves source photo aspect ratio (center-crop fit) and avoids adjacent duplicate-photo placement, with penalties for nearby repeats.
