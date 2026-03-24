@@ -88,26 +88,30 @@
       </div>
       <div class="grid three">
         <label class="field">
-          <span>Exclude master color</span>
-          <input type="checkbox" id="excludeColorEnabled" />
+          <span>Use color-range tool</span>
+          <input type="checkbox" id="colorToolEnabled" />
         </label>
         <label class="field">
-          <span>Color to exclude</span>
+          <span>Color tool mode</span>
+          <select id="colorToolMode">
+            <option value="exclude">Exclude</option>
+            <option value="include">Include</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Color selection</span>
           <input type="color" id="excludeColor" value="#00ff00" />
         </label>
         <label class="field">
           <span>Color tolerance (0-255)</span>
           <input type="range" id="excludeTolerance" min="0" max="255" value="42" />
         </label>
-        <label class="field">
-          <span>Min island size (px)</span>
-          <input type="number" id="excludeMinIsland" min="0" step="1" value="250" />
-        </label>
       </div>
       <div class="inline">
-        <label>Patch blending strength
-          <input type="range" id="patchBlend" min="0" max="4" value="2" />
+        <label>Smooth mask islands smaller than
+          <input type="number" id="smoothMinIsland" min="0" step="1" value="250" />
         </label>
+        <button id="smoothMaskBtn">Smooth mask</button>
       </div>
     </section>
 

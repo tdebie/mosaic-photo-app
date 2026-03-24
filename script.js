@@ -3,8 +3,7 @@ const MAX_SOURCES = 200;
 const state = {
   masterImage: null,
   sourcePhotos: [],
-  mask: null, // manual painted mask: 0 none, 1 include, 2 exclude
-  autoExcludeMask: null, // automatic color-based exclusions: 0 none, 2 exclude
+  mask: null, // effective mask: 1 include, 2 exclude
   generated: null,
 };
 
@@ -23,11 +22,12 @@ const els = {
   mode: document.getElementById('mode'),
   matchTolerance: document.getElementById('matchTolerance'),
   adjustTolerance: document.getElementById('adjustTolerance'),
-  excludeColorEnabled: document.getElementById('excludeColorEnabled'),
+  colorToolEnabled: document.getElementById('colorToolEnabled'),
+  colorToolMode: document.getElementById('colorToolMode'),
   excludeColor: document.getElementById('excludeColor'),
   excludeTolerance: document.getElementById('excludeTolerance'),
-  excludeMinIsland: document.getElementById('excludeMinIsland'),
-  patchBlend: document.getElementById('patchBlend'),
+  smoothMinIsland: document.getElementById('smoothMinIsland'),
+  smoothMaskBtn: document.getElementById('smoothMaskBtn'),
   maskCanvas: document.getElementById('maskCanvas'),
   brushSize: document.getElementById('brushSize'),
   clearMask: document.getElementById('clearMask'),
@@ -202,13 +202,8 @@ function filterSmallComponents(binary, w, h, targetValue, minSize, replacementVa
   }
 }
 
-function recomputeAutoExcludeMask() {
-  if (!state.masterImage || !state.autoExcludeMask) return;
-  state.autoExcludeMask.fill(0);
-  if (!els.excludeColorEnabled.checked) {
-    drawMaskPreview();
-    return;
-  }
+function applyColorToolToMask() {
+  if (!state.masterImage || !state.mask || !els.colorToolEnabled.checked) return;
 
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = els.maskCanvas.width;
@@ -217,25 +212,29 @@ function recomputeAutoExcludeMask() {
   tempCtx.drawImage(state.masterImage, 0, 0, tempCanvas.width, tempCanvas.height);
   const img = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
   const data = img.data;
-  const excludedColor = hexToRgb(els.excludeColor.value);
+  const selectedColor = hexToRgb(els.excludeColor.value);
   const tol = parseInt(els.excludeTolerance.value, 10);
-  const minIsland = Math.max(0, parseInt(els.excludeMinIsland.value, 10) || 0);
-  const binary = new Uint8Array(tempCanvas.width * tempCanvas.height);
-
-  for (let i = 0; i < binary.length; i++) {
+  const modeVal = els.colorToolMode.value === 'include' ? 1 : 2;
+  for (let i = 0; i < state.mask.length; i++) {
     const p = i * 4;
     const c = [data[p], data[p + 1], data[p + 2]];
-    if (colorDistance(c, excludedColor) <= tol) binary[i] = 1;
+    if (colorDistance(c, selectedColor) <= tol) state.mask[i] = modeVal;
   }
+  drawMaskPreview();
+}
 
-  // Remove tiny exclusion and tiny inclusion islands.
-  filterSmallComponents(binary, tempCanvas.width, tempCanvas.height, 1, minIsland, 0);
-  filterSmallComponents(binary, tempCanvas.width, tempCanvas.height, 0, minIsland, 1);
-
-  for (let i = 0; i < binary.length; i++) {
-    if (binary[i] === 1) state.autoExcludeMask[i] = 2;
+function smoothMaskIslands() {
+  if (!state.mask) return;
+  const minIsland = Math.max(0, parseInt(els.smoothMinIsland.value, 10) || 0);
+  const binary = new Uint8Array(state.mask.length);
+  for (let i = 0; i < state.mask.length; i++) {
+    binary[i] = state.mask[i] === 1 ? 1 : 0;
   }
-
+  filterSmallComponents(binary, els.maskCanvas.width, els.maskCanvas.height, 1, minIsland, 0);
+  filterSmallComponents(binary, els.maskCanvas.width, els.maskCanvas.height, 0, minIsland, 1);
+  for (let i = 0; i < state.mask.length; i++) {
+    state.mask[i] = binary[i] === 1 ? 1 : 2;
+  }
   drawMaskPreview();
 }
 
@@ -292,7 +291,6 @@ async function handleMasterUpload() {
   if (!file) return;
   state.masterImage = await loadImage(file);
   fitMaskCanvas();
-  recomputeAutoExcludeMask();
   drawMaskPreview();
   updateStatus();
 }
@@ -336,7 +334,7 @@ function fitMaskCanvas() {
   els.maskCanvas.width = Math.round(state.masterImage.width * scale);
   els.maskCanvas.height = Math.round(state.masterImage.height * scale);
   state.mask = new Uint8Array(els.maskCanvas.width * els.maskCanvas.height);
-  state.autoExcludeMask = new Uint8Array(els.maskCanvas.width * els.maskCanvas.height);
+  state.mask.fill(1);
 }
 
 function drawMaskPreview() {
@@ -348,17 +346,18 @@ function drawMaskPreview() {
   const imgData = maskCtx.getImageData(0, 0, els.maskCanvas.width, els.maskCanvas.height);
   const data = imgData.data;
   for (let i = 0; i < state.mask.length; i++) {
-    const m = state.mask[i] || state.autoExcludeMask[i] || 0;
-    if (m === 0) continue;
+    const m = state.mask[i];
     const p = i * 4;
     if (m === 1) {
-      data[p] = 0;
-      data[p + 1] = Math.min(255, data[p + 1] + 80);
-      data[p + 2] = 0;
+      const a = 0.17;
+      data[p] = Math.round(data[p] * (1 - a));
+      data[p + 1] = Math.round(data[p + 1] * (1 - a) + 255 * a);
+      data[p + 2] = Math.round(data[p + 2] * (1 - a));
     } else if (m === 2) {
-      data[p] = Math.min(255, data[p] + 120);
-      data[p + 1] = 0;
-      data[p + 2] = 0;
+      const a = 0.24;
+      data[p] = Math.round(data[p] * (1 - a) + 255 * a);
+      data[p + 1] = Math.round(data[p + 1] * (1 - a));
+      data[p + 2] = Math.round(data[p + 2] * (1 - a));
     }
   }
   maskCtx.putImageData(imgData, 0, 0);
@@ -367,7 +366,7 @@ function drawMaskPreview() {
 function paintMask(x, y) {
   const brush = clamp(parseInt(els.brushSize.value, 10) || 24, 4, 180);
   const mode = document.querySelector('input[name="maskMode"]:checked').value;
-  const value = mode === 'include' ? 1 : mode === 'exclude' ? 2 : 0;
+  const value = mode === 'include' ? 1 : mode === 'exclude' ? 2 : 1;
 
   for (let py = -brush; py <= brush; py++) {
     for (let px = -brush; px <= brush; px++) {
@@ -487,9 +486,6 @@ function createDecisionMap(settings, masterCtx) {
   const mapW = Math.max(80, Math.round(settings.pxW / 32));
   const mapH = Math.max(80, Math.round(settings.pxH / 32));
   let map = new Uint8Array(mapW * mapH);
-  const excludeEnabled = els.excludeColorEnabled.checked;
-  const excludedColor = hexToRgb(els.excludeColor.value);
-  const excludeTolerance = parseInt(els.excludeTolerance.value, 10);
 
   for (let my = 0; my < mapH; my++) {
     for (let mx = 0; mx < mapW; mx++) {
@@ -497,11 +493,7 @@ function createDecisionMap(settings, masterCtx) {
       const y = Math.floor((my / mapH) * settings.pxH);
       const w = Math.max(1, Math.floor(settings.pxW / mapW));
       const h = Math.max(1, Math.floor(settings.pxH / mapH));
-      const tileStats = getTileStatsFromMaster(x, y, w, h, masterCtx);
       let allow = 1;
-      if (excludeEnabled && colorDistance(tileStats.avgColor, excludedColor) <= excludeTolerance) {
-        allow = 0;
-      }
 
       if (state.mask) {
         let includeVotes = 0;
@@ -510,11 +502,9 @@ function createDecisionMap(settings, masterCtx) {
           for (let px = x; px < Math.min(settings.pxW, x + w); px += 3) {
             const sx = Math.floor((px / settings.pxW) * els.maskCanvas.width);
             const sy = Math.floor((py / settings.pxH) * els.maskCanvas.height);
-            const i = sy * els.maskCanvas.width + sx;
-            const manual = state.mask[i];
-            const auto = state.autoExcludeMask[i];
-            if (manual === 1) includeVotes++;
-            else if (manual === 2 || auto === 2) excludeVotes++;
+            const val = state.mask[sy * els.maskCanvas.width + sx];
+            if (val === 1) includeVotes++;
+            else excludeVotes++;
           }
         }
         if (includeVotes > excludeVotes) allow = 1;
@@ -523,11 +513,6 @@ function createDecisionMap(settings, masterCtx) {
 
       map[my * mapW + mx] = allow;
     }
-  }
-
-  const blendPasses = parseInt(els.patchBlend.value, 10);
-  for (let pass = 0; pass < blendPasses; pass++) {
-    map = smoothBinaryMap(map, mapW, mapH);
   }
 
   return { map, mapW, mapH };
@@ -575,7 +560,7 @@ function mapAllowsMosaic(x, y, w, h, decision) {
 function buildOutputAllowMask(settings, decision) {
   const mask = new Uint8Array(settings.pxW * settings.pxH);
   for (let y = 0; y < settings.pxH; y++) {
-    const my = Math.min(decision.mapH - 1, Math.floor((y / settings.pxH) * decision.mapH));
+      const my = Math.min(decision.mapH - 1, Math.floor((y / settings.pxH) * decision.mapH));
     for (let x = 0; x < settings.pxW; x++) {
       const mx = Math.min(decision.mapW - 1, Math.floor((x / settings.pxW) * decision.mapW));
       mask[y * settings.pxW + x] = decision.map[my * decision.mapW + mx];
@@ -588,9 +573,7 @@ function buildOutputAllowMask(settings, decision) {
       for (let x = 0; x < settings.pxW; x++) {
         const sx = Math.min(els.maskCanvas.width - 1, Math.floor((x / settings.pxW) * els.maskCanvas.width));
         const paintVal = state.mask[sy * els.maskCanvas.width + sx];
-        const autoVal = state.autoExcludeMask[sy * els.maskCanvas.width + sx];
-        if (paintVal === 1) mask[y * settings.pxW + x] = 1;
-        if (paintVal === 2 || autoVal === 2) mask[y * settings.pxW + x] = 0;
+        mask[y * settings.pxW + x] = paintVal === 1 ? 1 : 0;
       }
     }
   }
@@ -791,12 +774,12 @@ els.printPreset.addEventListener('change', updatePrintPreset);
   el.addEventListener('input', updateResolutionHint);
 });
 [
-  els.excludeColorEnabled,
+  els.colorToolEnabled,
+  els.colorToolMode,
   els.excludeColor,
   els.excludeTolerance,
-  els.excludeMinIsland,
 ].forEach((el) => {
-  el.addEventListener('input', recomputeAutoExcludeMask);
+  el.addEventListener('input', applyColorToolToMask);
 });
 els.masterInput.addEventListener('change', () => handleMasterUpload().catch(console.error));
 els.sourcesInput.addEventListener('change', () => handleSourceUpload().catch(console.error));
@@ -804,9 +787,10 @@ els.generateBtn.addEventListener('click', () => generateMosaic().catch(console.e
 els.downloadBtn.addEventListener('click', downloadOutput);
 els.clearMask.addEventListener('click', () => {
   if (!state.mask) return;
-  state.mask.fill(0);
+  state.mask.fill(1);
   drawMaskPreview();
 });
+els.smoothMaskBtn.addEventListener('click', smoothMaskIslands);
 
 initMaskPainting();
 updateResolutionHint();
