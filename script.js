@@ -430,7 +430,6 @@ function smoothBinaryMap(source, w, h) {
 function mapAllowsMosaic(x, y, w, h, decision) {
   if (!decision) return true;
   let includeVotes = 0;
-  let excludeVotes = 0;
 
   const sx = Math.max(0, Math.floor((x / els.outputCanvas.width) * decision.mapW));
   const sy = Math.max(0, Math.floor((y / els.outputCanvas.height) * decision.mapH));
@@ -441,13 +440,37 @@ function mapAllowsMosaic(x, y, w, h, decision) {
     for (let px = sx; px <= ex; px++) {
       const val = decision.map[py * decision.mapW + px];
       if (val === 1) includeVotes++;
-      else excludeVotes++;
     }
   }
-  return includeVotes >= excludeVotes;
+  return includeVotes > 0;
 }
 
-function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance) {
+function buildOutputAllowMask(settings, decision) {
+  const mask = new Uint8Array(settings.pxW * settings.pxH);
+  for (let y = 0; y < settings.pxH; y++) {
+    const my = Math.min(decision.mapH - 1, Math.floor((y / settings.pxH) * decision.mapH));
+    for (let x = 0; x < settings.pxW; x++) {
+      const mx = Math.min(decision.mapW - 1, Math.floor((x / settings.pxW) * decision.mapW));
+      mask[y * settings.pxW + x] = decision.map[my * decision.mapW + mx];
+    }
+  }
+
+  if (state.mask) {
+    for (let y = 0; y < settings.pxH; y++) {
+      const sy = Math.min(els.maskCanvas.height - 1, Math.floor((y / settings.pxH) * els.maskCanvas.height));
+      for (let x = 0; x < settings.pxW; x++) {
+        const sx = Math.min(els.maskCanvas.width - 1, Math.floor((x / settings.pxW) * els.maskCanvas.width));
+        const paintVal = state.mask[sy * els.maskCanvas.width + sx];
+        if (paintVal === 1) mask[y * settings.pxW + x] = 1;
+        if (paintVal === 2) mask[y * settings.pxW + x] = 0;
+      }
+    }
+  }
+
+  return mask;
+}
+
+function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance, outputAllowMask) {
   const tile = document.createElement('canvas');
   tile.width = Math.max(1, Math.round(dw));
   tile.height = Math.max(1, Math.round(dh));
@@ -480,6 +503,13 @@ function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance) 
     data[i] = Math.round(cr * (1 - colorBlend) + target[0] * colorBlend);
     data[i + 1] = Math.round(cg * (1 - colorBlend) + target[1] * colorBlend);
     data[i + 2] = Math.round(cb * (1 - colorBlend) + target[2] * colorBlend);
+    const p = i / 4;
+    const localX = p % tile.width;
+    const localY = Math.floor(p / tile.width);
+    const ox = Math.min(els.outputCanvas.width - 1, Math.floor(dx + localX));
+    const oy = Math.min(els.outputCanvas.height - 1, Math.floor(dy + localY));
+    const allowed = outputAllowMask[oy * els.outputCanvas.width + ox] === 1;
+    if (!allowed) data[i + 3] = 0;
   }
   tileCtx.putImageData(imageData, 0, 0);
   outputCtx.drawImage(tile, dx, dy, dw, dh);
@@ -505,6 +535,7 @@ async function generateMosaic() {
   const masterCtx = masterCanvas.getContext('2d');
   masterCtx.drawImage(state.masterImage, 0, 0, settings.pxW, settings.pxH);
   const decision = createDecisionMap(settings, masterCtx);
+  const outputAllowMask = buildOutputAllowMask(settings, decision);
 
   let y = 0;
   let tiles = 0;
@@ -527,7 +558,7 @@ async function generateMosaic() {
         const tileStats = getTileStatsFromMaster(x, y, w, h, masterCtx);
         const photo = pickPhoto(tileStats, settings);
         if (photo) {
-          drawPhotoAdjusted(photo, x, y, w, h, tileStats, adjustTolerance);
+          drawPhotoAdjusted(photo, x, y, w, h, tileStats, adjustTolerance, outputAllowMask);
           photo.usedCount += 1;
         } else {
           skipped += 1;
