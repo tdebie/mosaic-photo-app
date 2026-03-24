@@ -30,6 +30,8 @@ const els = {
   excludeTolerance: document.getElementById('excludeTolerance'),
   smoothMinIsland: document.getElementById('smoothMinIsland'),
   smoothMaskBtn: document.getElementById('smoothMaskBtn'),
+  boundarySmoothRadius: document.getElementById('boundarySmoothRadius'),
+  smoothBoundaryBtn: document.getElementById('smoothBoundaryBtn'),
   maskCanvas: document.getElementById('maskCanvas'),
   brushSize: document.getElementById('brushSize'),
   clearMask: document.getElementById('clearMask'),
@@ -261,6 +263,37 @@ function smoothMaskIslands() {
   drawMaskPreview();
 }
 
+function smoothMaskBoundaries() {
+  if (!state.mask) return;
+  const r = clamp(parseInt(els.boundarySmoothRadius.value, 10) || 2, 1, 8);
+  const w = els.maskCanvas.width;
+  const h = els.maskCanvas.height;
+  const source = new Uint8Array(state.mask.length);
+  for (let i = 0; i < state.mask.length; i++) source[i] = state.mask[i] === 1 ? 1 : 0;
+  const out = new Uint8Array(source.length);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let ones = 0;
+      let total = 0;
+      for (let oy = -r; oy <= r; oy++) {
+        for (let ox = -r; ox <= r; ox++) {
+          const nx = x + ox;
+          const ny = y + oy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          if (ox * ox + oy * oy > r * r) continue;
+          total++;
+          if (source[ny * w + nx] === 1) ones++;
+        }
+      }
+      out[y * w + x] = ones >= Math.ceil(total / 2) ? 1 : 0;
+    }
+  }
+
+  for (let i = 0; i < state.mask.length; i++) state.mask[i] = out[i] === 1 ? 1 : 2;
+  drawMaskPreview();
+}
+
 function computePhotoStats(canvasCtx, w, h) {
   const sampleStep = Math.max(1, Math.floor(Math.sqrt((w * h) / 20000)));
   const data = canvasCtx.getImageData(0, 0, w, h).data;
@@ -302,6 +335,7 @@ async function processSourceFile(file, maxEdge) {
   const stats = computePhotoStats(ctx, w, h);
 
   return {
+    id: `${file.name}-${Math.random().toString(36).slice(2, 9)}`,
     name: file.name,
     canvas,
     stats,
@@ -474,7 +508,27 @@ function matchScore(tileStats, photo, adjustTolerance) {
   return Math.max(0, raw - adjustmentAllowance * 0.25);
 }
 
-function pickPhoto(tileStats, settings) {
+function getProximityPenalty(photo, x, y, w, h, placements) {
+  let penalty = 0;
+  for (let i = placements.length - 1; i >= 0; i--) {
+    const p = placements[i];
+    const dx = Math.abs((x + w / 2) - (p.x + p.w / 2));
+    const dy = Math.abs((y + h / 2) - (p.y + p.h / 2));
+    const adjacentX = dx <= (w + p.w) / 2 + 2;
+    const adjacentY = dy <= (h + p.h) / 2 + 2;
+    if (p.photoId === photo.id && adjacentX && adjacentY) return Infinity;
+
+    if (p.photoId === photo.id) {
+      const nearDist = Math.hypot(dx, dy);
+      if (nearDist < Math.max(w, h) * 2.8) penalty += 0.45;
+      else if (nearDist < Math.max(w, h) * 4.5) penalty += 0.2;
+    }
+    if (placements.length - i > 200) break;
+  }
+  return penalty;
+}
+
+function pickPhoto(tileStats, settings, x, y, w, h, placements) {
   if (state.sourcePhotos.length === 0) return null;
   const mode = els.mode.value;
   const matchTolerance = parseInt(els.matchTolerance.value, 10) / 100;
@@ -485,7 +539,9 @@ function pickPhoto(tileStats, settings) {
 
   for (const photo of state.sourcePhotos) {
     const usagePenalty = photo.usedCount * 0.03;
-    const score = matchScore(tileStats, photo, adjustTolerance) + usagePenalty;
+    const proximityPenalty = getProximityPenalty(photo, x, y, w, h, placements);
+    if (!Number.isFinite(proximityPenalty)) continue;
+    const score = matchScore(tileStats, photo, adjustTolerance) + usagePenalty + proximityPenalty;
     if (score < bestScore) {
       best = photo;
       bestScore = score;
@@ -499,11 +555,13 @@ function pickPhoto(tileStats, settings) {
   if (mode === 'all') {
     // Bias toward least-used images while keeping color relevance.
     const ordered = [...state.sourcePhotos].sort((a, b) => {
-      const sa = matchScore(tileStats, a, adjustTolerance) + a.usedCount * 0.08;
-      const sb = matchScore(tileStats, b, adjustTolerance) + b.usedCount * 0.08;
+      const pa = getProximityPenalty(a, x, y, w, h, placements);
+      const pb = getProximityPenalty(b, x, y, w, h, placements);
+      const sa = (Number.isFinite(pa) ? pa : 999) + matchScore(tileStats, a, adjustTolerance) + a.usedCount * 0.08;
+      const sb = (Number.isFinite(pb) ? pb : 999) + matchScore(tileStats, b, adjustTolerance) + b.usedCount * 0.08;
       return sa - sb;
     });
-    return ordered[0];
+    return ordered.find((p) => Number.isFinite(getProximityPenalty(p, x, y, w, h, placements))) || null;
   }
 
   return best;
@@ -613,7 +671,17 @@ function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance, 
   tile.width = Math.max(1, Math.round(dw));
   tile.height = Math.max(1, Math.round(dh));
   const tileCtx = tile.getContext('2d');
-  tileCtx.drawImage(photo.canvas, 0, 0, tile.width, tile.height);
+  const srcRatio = photo.canvas.width / photo.canvas.height;
+  const dstRatio = tile.width / tile.height;
+  let sx = 0, sy = 0, sw = photo.canvas.width, sh = photo.canvas.height;
+  if (srcRatio > dstRatio) {
+    sw = Math.round(photo.canvas.height * dstRatio);
+    sx = Math.floor((photo.canvas.width - sw) / 2);
+  } else if (srcRatio < dstRatio) {
+    sh = Math.round(photo.canvas.width / dstRatio);
+    sy = Math.floor((photo.canvas.height - sh) / 2);
+  }
+  tileCtx.drawImage(photo.canvas, sx, sy, sw, sh, 0, 0, tile.width, tile.height);
   const imageData = tileCtx.getImageData(0, 0, tile.width, tile.height);
   const data = imageData.data;
   const satDiff = targetStats.saturation - photo.stats.saturation;
@@ -696,6 +764,7 @@ async function generateMosaic() {
   let tiles = 0;
   let skipped = 0;
   const adjustTolerance = parseInt(els.adjustTolerance.value, 10);
+  const placements = [];
 
   while (y < settings.pxH) {
     const rowH = settings.vary
@@ -724,7 +793,7 @@ async function generateMosaic() {
           x += w;
           continue;
         }
-        const photo = pickPhoto(tileStats, settings);
+        const photo = pickPhoto(tileStats, settings, x, y, w, h, placements);
         if (photo) {
           const drawRect = getJitteredDrawRect(x, y, w, h, settings.overlapPct);
           drawPhotoAdjusted(
@@ -738,6 +807,7 @@ async function generateMosaic() {
             outputAllowMask
           );
           photo.usedCount += 1;
+          placements.push({ x: drawRect.dx, y: drawRect.dy, w: drawRect.dw, h: drawRect.dh, photoId: photo.id });
         } else {
           skipped += 1;
         }
@@ -867,6 +937,7 @@ els.clearMask.addEventListener('click', () => {
   drawMaskPreview();
 });
 els.smoothMaskBtn.addEventListener('click', smoothMaskIslands);
+els.smoothBoundaryBtn.addEventListener('click', smoothMaskBoundaries);
 
 initMaskPainting();
 updateResolutionHint();
