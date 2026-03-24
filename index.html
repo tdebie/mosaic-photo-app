@@ -30,39 +30,40 @@
       <h2>2) Print and tile settings</h2>
       <div class="grid three">
         <label class="field">
-          <span>Print size preset</span>
+          <span>Print size preset (long edge)</span>
           <select id="printPreset">
-            <option value="8x10">8x10 in</option>
-            <option value="11x14">11x14 in</option>
-            <option value="16x20" selected>16x20 in</option>
-            <option value="18x24">18x24 in</option>
-            <option value="24x36">24x36 in</option>
+            <option value="20">20 cm</option>
+            <option value="30">30 cm</option>
+            <option value="40" selected>40 cm</option>
+            <option value="50">50 cm</option>
+            <option value="60">60 cm</option>
             <option value="custom">Custom</option>
           </select>
         </label>
         <label class="field">
-          <span>Width (in)</span>
-          <input type="number" id="printWidth" min="1" step="0.1" value="16" />
+          <span>Width (cm)</span>
+          <input type="number" id="printWidth" min="1" step="0.1" value="32" />
         </label>
         <label class="field">
-          <span>Height (in)</span>
-          <input type="number" id="printHeight" min="1" step="0.1" value="20" />
+          <span>Height (cm)</span>
+          <input type="number" id="printHeight" min="1" step="0.1" value="40" />
         </label>
         <label class="field">
           <span>Target DPI</span>
           <input type="number" id="dpi" min="72" max="600" step="1" value="300" />
         </label>
         <label class="field">
-          <span>Tile min size (in)</span>
-          <input type="number" id="tileMin" min="0.1" step="0.05" value="0.5" />
+          <span>Tile min size (cm)</span>
+          <input type="number" id="tileMin" min="0.1" step="0.1" value="1.2" />
         </label>
         <label class="field">
-          <span>Tile max size (in)</span>
-          <input type="number" id="tileMax" min="0.1" step="0.05" value="1" />
+          <span>Tile max size (cm)</span>
+          <input type="number" id="tileMax" min="0.1" step="0.1" value="2.5" />
         </label>
       </div>
       <div class="inline">
         <label><input type="checkbox" id="varyTileSize" checked /> Vary tile sizes for randomized effect</label>
+        <label><input type="checkbox" id="lockAspect" checked /> Keep master aspect ratio</label>
       </div>
       <p id="resolutionHint" class="hint"></p>
     </section>

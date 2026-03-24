@@ -14,6 +14,7 @@ const els = {
   printPreset: document.getElementById('printPreset'),
   printWidth: document.getElementById('printWidth'),
   printHeight: document.getElementById('printHeight'),
+  lockAspect: document.getElementById('lockAspect'),
   dpi: document.getElementById('dpi'),
   tileMin: document.getElementById('tileMin'),
   tileMax: document.getElementById('tileMax'),
@@ -46,25 +47,39 @@ function clamp(v, min, max) {
 }
 
 function getSettings() {
-  const widthIn = parseFloat(els.printWidth.value) || 16;
-  const heightIn = parseFloat(els.printHeight.value) || 20;
+  const widthCm = parseFloat(els.printWidth.value) || 32;
+  const heightCm = parseFloat(els.printHeight.value) || 40;
   const dpi = parseInt(els.dpi.value, 10) || 300;
-  const tileMinIn = parseFloat(els.tileMin.value) || 0.5;
-  const tileMaxIn = Math.max(tileMinIn, parseFloat(els.tileMax.value) || 1);
+  const tileMinCm = parseFloat(els.tileMin.value) || 1.2;
+  const tileMaxCm = Math.max(tileMinCm, parseFloat(els.tileMax.value) || 2.5);
   const vary = els.varyTileSize.checked;
-  const pxW = Math.round(widthIn * dpi);
-  const pxH = Math.round(heightIn * dpi);
-  const tileMinPx = Math.max(8, Math.round(tileMinIn * dpi));
-  const tileMaxPx = Math.max(tileMinPx, Math.round(tileMaxIn * dpi));
-  return { widthIn, heightIn, dpi, tileMinIn, tileMaxIn, pxW, pxH, tileMinPx, tileMaxPx, vary };
+  const pxW = Math.round((widthCm / 2.54) * dpi);
+  const pxH = Math.round((heightCm / 2.54) * dpi);
+  const tileMinPx = Math.max(8, Math.round((tileMinCm / 2.54) * dpi));
+  const tileMaxPx = Math.max(tileMinPx, Math.round((tileMaxCm / 2.54) * dpi));
+  return { widthCm, heightCm, dpi, tileMinCm, tileMaxCm, pxW, pxH, tileMinPx, tileMaxPx, vary };
 }
 
 function updatePrintPreset() {
   if (els.printPreset.value === 'custom') return;
-  const [w, h] = els.printPreset.value.split('x').map(Number);
-  els.printWidth.value = w;
-  els.printHeight.value = h;
+  const longEdgeCm = parseFloat(els.printPreset.value);
+  applyProportionalPrintSize(longEdgeCm);
   updateResolutionHint();
+}
+
+function applyProportionalPrintSize(longEdgeCm) {
+  let ratio = 4 / 5;
+  if (state.masterImage) {
+    ratio = state.masterImage.width / state.masterImage.height;
+  }
+  if (!els.lockAspect.checked && els.printPreset.value === 'custom') return;
+  if (ratio >= 1) {
+    els.printWidth.value = longEdgeCm.toFixed(1);
+    els.printHeight.value = (longEdgeCm / ratio).toFixed(1);
+  } else {
+    els.printHeight.value = longEdgeCm.toFixed(1);
+    els.printWidth.value = (longEdgeCm * ratio).toFixed(1);
+  }
 }
 
 function estimateTileCount(settings) {
@@ -85,7 +100,13 @@ function updateResolutionHint() {
   const settings = getSettings();
   const tiles = estimateTileCount(settings);
   const maxRes = computeSourceMaxResolution(settings, state.sourcePhotos.length || 1);
-  els.resolutionHint.textContent = `Estimated ${tiles.toLocaleString()} mosaic tiles. Recommended max source downsample: longest edge ≈ ${maxRes}px.`;
+  let masterHint = 'Load master image to compute max print at 300 DPI.';
+  if (state.masterImage) {
+    const maxWidthCm = (state.masterImage.width / 300) * 2.54;
+    const maxHeightCm = (state.masterImage.height / 300) * 2.54;
+    masterHint = `Master max at 300 DPI: ${maxWidthCm.toFixed(1)} × ${maxHeightCm.toFixed(1)} cm.`;
+  }
+  els.resolutionHint.textContent = `Estimated ${tiles.toLocaleString()} mosaic tiles. Recommended max source downsample: longest edge ≈ ${maxRes}px. ${masterHint}`;
 }
 
 function rgbToHsv(r, g, b) {
@@ -291,8 +312,12 @@ async function handleMasterUpload() {
   if (!file) return;
   state.masterImage = await loadImage(file);
   fitMaskCanvas();
+  if (els.lockAspect.checked && els.printPreset.value !== 'custom') {
+    applyProportionalPrintSize(parseFloat(els.printPreset.value));
+  }
   drawMaskPreview();
   updateStatus();
+  updateResolutionHint();
 }
 
 async function handleSourceUpload() {
@@ -770,8 +795,30 @@ function initMaskPainting() {
 }
 
 els.printPreset.addEventListener('change', updatePrintPreset);
-[els.printWidth, els.printHeight, els.dpi, els.tileMin, els.tileMax, els.varyTileSize].forEach((el) => {
+[els.dpi, els.tileMin, els.tileMax, els.varyTileSize].forEach((el) => {
   el.addEventListener('input', updateResolutionHint);
+});
+els.printWidth.addEventListener('input', () => {
+  if (els.lockAspect.checked && state.masterImage) {
+    const ratio = state.masterImage.width / state.masterImage.height;
+    const w = parseFloat(els.printWidth.value) || 1;
+    els.printHeight.value = (w / ratio).toFixed(1);
+  }
+  updateResolutionHint();
+});
+els.printHeight.addEventListener('input', () => {
+  if (els.lockAspect.checked && state.masterImage) {
+    const ratio = state.masterImage.width / state.masterImage.height;
+    const h = parseFloat(els.printHeight.value) || 1;
+    els.printWidth.value = (h * ratio).toFixed(1);
+  }
+  updateResolutionHint();
+});
+els.lockAspect.addEventListener('input', () => {
+  if (els.lockAspect.checked && els.printPreset.value !== 'custom') {
+    applyProportionalPrintSize(parseFloat(els.printPreset.value));
+  }
+  updateResolutionHint();
 });
 [
   els.colorToolEnabled,
