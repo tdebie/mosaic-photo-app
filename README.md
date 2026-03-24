@@ -19,6 +19,7 @@ Client-side web app for generating a printable photo mosaic.
   - Use best matches only (respecting match tolerance)
 - Adjustment tolerance controls how much brightness/saturation/color can be nudged to improve match.
 - Optional master-color exclusion (with tolerance) to keep chosen colors as original master pixels.
+- Optional auto-exclusion painting from chosen color + tolerance + minimum island size (small regions are merged automatically).
 - Patch blending control smooths isolated include/exclude islands for cleaner regions.
 - Boundary-safe compositing: tiles are alpha-cut at inclusion/exclusion edges so excluded regions remain true master-photo pixels.
 - Output reporting includes used/unused source images and counts.

@@ -3,7 +3,8 @@ const MAX_SOURCES = 200;
 const state = {
   masterImage: null,
   sourcePhotos: [],
-  mask: null,
+  mask: null, // manual painted mask: 0 none, 1 include, 2 exclude
+  autoExcludeMask: null, // automatic color-based exclusions: 0 none, 2 exclude
   generated: null,
 };
 
@@ -25,6 +26,7 @@ const els = {
   excludeColorEnabled: document.getElementById('excludeColorEnabled'),
   excludeColor: document.getElementById('excludeColor'),
   excludeTolerance: document.getElementById('excludeTolerance'),
+  excludeMinIsland: document.getElementById('excludeMinIsland'),
   patchBlend: document.getElementById('patchBlend'),
   maskCanvas: document.getElementById('maskCanvas'),
   brushSize: document.getElementById('brushSize'),
@@ -150,6 +152,93 @@ function loadImage(file) {
   });
 }
 
+function filterSmallComponents(binary, w, h, targetValue, minSize, replacementValue) {
+  if (minSize <= 0) return;
+  const visited = new Uint8Array(binary.length);
+  const stackX = new Int32Array(binary.length);
+  const stackY = new Int32Array(binary.length);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      if (visited[idx] || binary[idx] !== targetValue) continue;
+
+      let count = 0;
+      let top = 0;
+      stackX[top] = x;
+      stackY[top] = y;
+      visited[idx] = 1;
+      const members = [];
+
+      while (top >= 0) {
+        const cx = stackX[top];
+        const cy = stackY[top];
+        top--;
+        const ci = cy * w + cx;
+        members.push(ci);
+        count++;
+
+        const neighbors = [
+          [cx - 1, cy],
+          [cx + 1, cy],
+          [cx, cy - 1],
+          [cx, cy + 1],
+        ];
+        for (const [nx, ny] of neighbors) {
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const ni = ny * w + nx;
+          if (visited[ni] || binary[ni] !== targetValue) continue;
+          visited[ni] = 1;
+          top++;
+          stackX[top] = nx;
+          stackY[top] = ny;
+        }
+      }
+
+      if (count < minSize) {
+        for (const m of members) binary[m] = replacementValue;
+      }
+    }
+  }
+}
+
+function recomputeAutoExcludeMask() {
+  if (!state.masterImage || !state.autoExcludeMask) return;
+  state.autoExcludeMask.fill(0);
+  if (!els.excludeColorEnabled.checked) {
+    drawMaskPreview();
+    return;
+  }
+
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = els.maskCanvas.width;
+  tempCanvas.height = els.maskCanvas.height;
+  const tempCtx = tempCanvas.getContext('2d');
+  tempCtx.drawImage(state.masterImage, 0, 0, tempCanvas.width, tempCanvas.height);
+  const img = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+  const data = img.data;
+  const excludedColor = hexToRgb(els.excludeColor.value);
+  const tol = parseInt(els.excludeTolerance.value, 10);
+  const minIsland = Math.max(0, parseInt(els.excludeMinIsland.value, 10) || 0);
+  const binary = new Uint8Array(tempCanvas.width * tempCanvas.height);
+
+  for (let i = 0; i < binary.length; i++) {
+    const p = i * 4;
+    const c = [data[p], data[p + 1], data[p + 2]];
+    if (colorDistance(c, excludedColor) <= tol) binary[i] = 1;
+  }
+
+  // Remove tiny exclusion and tiny inclusion islands.
+  filterSmallComponents(binary, tempCanvas.width, tempCanvas.height, 1, minIsland, 0);
+  filterSmallComponents(binary, tempCanvas.width, tempCanvas.height, 0, minIsland, 1);
+
+  for (let i = 0; i < binary.length; i++) {
+    if (binary[i] === 1) state.autoExcludeMask[i] = 2;
+  }
+
+  drawMaskPreview();
+}
+
 function computePhotoStats(canvasCtx, w, h) {
   const sampleStep = Math.max(1, Math.floor(Math.sqrt((w * h) / 20000)));
   const data = canvasCtx.getImageData(0, 0, w, h).data;
@@ -203,6 +292,7 @@ async function handleMasterUpload() {
   if (!file) return;
   state.masterImage = await loadImage(file);
   fitMaskCanvas();
+  recomputeAutoExcludeMask();
   drawMaskPreview();
   updateStatus();
 }
@@ -246,6 +336,7 @@ function fitMaskCanvas() {
   els.maskCanvas.width = Math.round(state.masterImage.width * scale);
   els.maskCanvas.height = Math.round(state.masterImage.height * scale);
   state.mask = new Uint8Array(els.maskCanvas.width * els.maskCanvas.height);
+  state.autoExcludeMask = new Uint8Array(els.maskCanvas.width * els.maskCanvas.height);
 }
 
 function drawMaskPreview() {
@@ -257,7 +348,7 @@ function drawMaskPreview() {
   const imgData = maskCtx.getImageData(0, 0, els.maskCanvas.width, els.maskCanvas.height);
   const data = imgData.data;
   for (let i = 0; i < state.mask.length; i++) {
-    const m = state.mask[i];
+    const m = state.mask[i] || state.autoExcludeMask[i] || 0;
     if (m === 0) continue;
     const p = i * 4;
     if (m === 1) {
@@ -385,9 +476,11 @@ function createDecisionMap(settings, masterCtx) {
           for (let px = x; px < Math.min(settings.pxW, x + w); px += 3) {
             const sx = Math.floor((px / settings.pxW) * els.maskCanvas.width);
             const sy = Math.floor((py / settings.pxH) * els.maskCanvas.height);
-            const val = state.mask[sy * els.maskCanvas.width + sx];
-            if (val === 1) includeVotes++;
-            if (val === 2) excludeVotes++;
+            const i = sy * els.maskCanvas.width + sx;
+            const manual = state.mask[i];
+            const auto = state.autoExcludeMask[i];
+            if (manual === 1) includeVotes++;
+            else if (manual === 2 || auto === 2) excludeVotes++;
           }
         }
         if (includeVotes > excludeVotes) allow = 1;
@@ -461,8 +554,9 @@ function buildOutputAllowMask(settings, decision) {
       for (let x = 0; x < settings.pxW; x++) {
         const sx = Math.min(els.maskCanvas.width - 1, Math.floor((x / settings.pxW) * els.maskCanvas.width));
         const paintVal = state.mask[sy * els.maskCanvas.width + sx];
+        const autoVal = state.autoExcludeMask[sy * els.maskCanvas.width + sx];
         if (paintVal === 1) mask[y * settings.pxW + x] = 1;
-        if (paintVal === 2) mask[y * settings.pxW + x] = 0;
+        if (paintVal === 2 || autoVal === 2) mask[y * settings.pxW + x] = 0;
       }
     }
   }
@@ -648,6 +742,14 @@ function initMaskPainting() {
 els.printPreset.addEventListener('change', updatePrintPreset);
 [els.printWidth, els.printHeight, els.dpi, els.tileMin, els.tileMax, els.varyTileSize].forEach((el) => {
   el.addEventListener('input', updateResolutionHint);
+});
+[
+  els.excludeColorEnabled,
+  els.excludeColor,
+  els.excludeTolerance,
+  els.excludeMinIsland,
+].forEach((el) => {
+  el.addEventListener('input', recomputeAutoExcludeMask);
 });
 els.masterInput.addEventListener('change', () => handleMasterUpload().catch(console.error));
 els.sourcesInput.addEventListener('change', () => handleSourceUpload().catch(console.error));
