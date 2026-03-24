@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mosaic Photo Builder</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <h1>Mosaic Photo Builder</h1>
+    <p class="sub">Upload a master photo and up to 200 source photos, then generate a print-ready mosaic.</p>
+
+    <section class="card">
+      <h2>1) Upload photos</h2>
+      <div class="grid two">
+        <label class="field">
+          <span>Master photo</span>
+          <input type="file" id="masterInput" accept="image/*" />
+        </label>
+        <label class="field">
+          <span>Source photos folder (up to 200)</span>
+          <input type="file" id="sourcesInput" accept="image/*" multiple webkitdirectory directory />
+        </label>
+      </div>
+      <p id="uploadStatus" class="status">No photos loaded yet.</p>
+    </section>
+
+    <section class="card">
+      <h2>2) Print and tile settings</h2>
+      <div class="grid three">
+        <label class="field">
+          <span>Print size preset (long edge)</span>
+          <select id="printPreset">
+            <option value="20">20 cm</option>
+            <option value="30">30 cm</option>
+            <option value="40" selected>40 cm</option>
+            <option value="50">50 cm</option>
+            <option value="60">60 cm</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Width (cm)</span>
+          <input type="number" id="printWidth" min="1" step="0.1" value="32" />
+        </label>
+        <label class="field">
+          <span>Height (cm)</span>
+          <input type="number" id="printHeight" min="1" step="0.1" value="40" />
+        </label>
+        <label class="field">
+          <span>Target DPI</span>
+          <input type="number" id="dpi" min="72" max="600" step="1" value="300" />
+        </label>
+        <label class="field">
+          <span>Tile min size (cm)</span>
+          <input type="number" id="tileMin" min="0.1" step="0.1" value="1.2" />
+        </label>
+        <label class="field">
+          <span>Tile max size (cm)</span>
+          <input type="number" id="tileMax" min="0.1" step="0.1" value="2.5" />
+        </label>
+      </div>
+      <div class="inline">
+        <label><input type="checkbox" id="varyTileSize" checked /> Vary tile sizes for randomized effect</label>
+        <label><input type="checkbox" id="lockAspect" checked /> Keep master aspect ratio</label>
+        <label>Overlap %
+          <input type="range" id="overlapPct" min="0" max="30" value="8" />
+        </label>
+        <label>Rotation ±deg
+          <input type="range" id="rotationDeg" min="0" max="8" value="2" />
+        </label>
+      </div>
+      <p id="resolutionHint" class="hint"></p>
+    </section>
+
+    <section class="card">
+      <h2>3) Matching controls</h2>
+      <div class="grid three">
+        <label class="field">
+          <span>Mode</span>
+          <select id="mode">
+            <option value="all">Use all photos (cycle)</option>
+            <option value="best">Use best matches first</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Match tolerance (0-100; higher = looser)</span>
+          <input type="range" id="matchTolerance" min="0" max="100" value="55" />
+        </label>
+        <label class="field">
+          <span>Adjustment tolerance (0-100)</span>
+          <input type="range" id="adjustTolerance" min="0" max="100" value="35" />
+        </label>
+      </div>
+      <div class="grid three">
+        <label class="field">
+          <span>Use color-range tool</span>
+          <input type="checkbox" id="colorToolEnabled" />
+        </label>
+        <label class="field">
+          <span>Color tool mode</span>
+          <select id="colorToolMode">
+            <option value="exclude">Exclude</option>
+            <option value="include">Include</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Color selection</span>
+          <input type="color" id="excludeColor" value="#00ff00" />
+        </label>
+        <label class="field">
+          <span>Color tolerance (0-255)</span>
+          <input type="range" id="excludeTolerance" min="0" max="255" value="42" />
+        </label>
+      </div>
+      <div class="inline">
+        <label>Smooth mask islands smaller than
+          <input type="number" id="smoothMinIsland" min="0" step="1" value="250" />
+        </label>
+        <button id="smoothMaskBtn">Smooth mask</button>
+        <label>Boundary smooth radius
+          <input type="number" id="boundarySmoothRadius" min="1" max="8" step="1" value="2" />
+        </label>
+        <button id="smoothBoundaryBtn">Smooth boundaries</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>4) Select master areas for inclusion/exclusion</h2>
+      <p class="sub">Paint on the master image. Green = include in mosaic. Red = exclude and keep original master region.</p>
+      <div class="inline">
+        <label><input type="radio" name="maskMode" value="include" checked /> Include brush</label>
+        <label><input type="radio" name="maskMode" value="exclude" /> Exclude brush</label>
+        <label><input type="radio" name="maskMode" value="erase" /> Erase brush</label>
+        <label>Brush px <input type="number" id="brushSize" value="24" min="4" max="180" /></label>
+        <button id="clearMask">Clear mask</button>
+      </div>
+      <canvas id="maskCanvas" width="960" height="540"></canvas>
+    </section>
+
+    <section class="card">
+      <h2>5) Generate</h2>
+      <div class="inline">
+        <button id="generateBtn">Generate mosaic</button>
+        <button id="downloadBtn" disabled>Download PNG</button>
+      </div>
+      <p id="generateStatus" class="status"></p>
+      <canvas id="outputCanvas" width="1200" height="1200"></canvas>
+      <div id="report" class="report"></div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
