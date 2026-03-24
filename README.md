@@ -22,6 +22,7 @@ Client-side web app for generating a printable photo mosaic.
 - Optional auto-exclusion painting from chosen color + tolerance + minimum island size (small regions are merged automatically).
 - Patch blending control smooths isolated include/exclude islands for cleaner regions.
 - Boundary-safe compositing: tiles are alpha-cut at inclusion/exclusion edges so excluded regions remain true master-photo pixels.
+- Edge-aware matching: color stats for edge tiles are computed only from actually visible (non-clipped) pixels.
 - Output reporting includes used/unused source images and counts.
 
 ## Run

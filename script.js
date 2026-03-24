@@ -403,6 +403,40 @@ function getTileStatsFromMaster(srcX, srcY, srcW, srcH, sampleCtx) {
   };
 }
 
+function getTileStatsFromMasterMasked(srcX, srcY, srcW, srcH, sampleCtx, outputAllowMask, canvasW, canvasH) {
+  const block = sampleCtx.getImageData(srcX, srcY, srcW, srcH).data;
+  let r = 0, g = 0, b = 0, s = 0, v = 0, n = 0;
+  let i = 0;
+  for (let y = 0; y < srcH; y++) {
+    for (let x = 0; x < srcW; x++) {
+      const ox = Math.min(canvasW - 1, srcX + x);
+      const oy = Math.min(canvasH - 1, srcY + y);
+      if (outputAllowMask[oy * canvasW + ox] !== 1) {
+        i += 4;
+        continue;
+      }
+      const rr = block[i];
+      const gg = block[i + 1];
+      const bb = block[i + 2];
+      const hsv = rgbToHsv(rr, gg, bb);
+      r += rr;
+      g += gg;
+      b += bb;
+      s += hsv.s;
+      v += hsv.v;
+      n++;
+      i += 4;
+    }
+  }
+
+  if (n === 0) return null;
+  return {
+    avgColor: [r / n, g / n, b / n],
+    saturation: s / n,
+    brightness: v / n,
+  };
+}
+
 function matchScore(tileStats, photo, adjustTolerance) {
   const [tr, tg, tb] = tileStats.avgColor;
   const [pr, pg, pb] = photo.stats.avgColor;
@@ -649,7 +683,20 @@ async function generateMosaic() {
       const h = Math.min(rowH, settings.pxH - y);
 
       if (mapAllowsMosaic(x, y, w, h, decision)) {
-        const tileStats = getTileStatsFromMaster(x, y, w, h, masterCtx);
+        const tileStats = getTileStatsFromMasterMasked(
+          x,
+          y,
+          w,
+          h,
+          masterCtx,
+          outputAllowMask,
+          settings.pxW,
+          settings.pxH
+        );
+        if (!tileStats) {
+          x += w;
+          continue;
+        }
         const photo = pickPhoto(tileStats, settings);
         if (photo) {
           drawPhotoAdjusted(photo, x, y, w, h, tileStats, adjustTolerance, outputAllowMask);
