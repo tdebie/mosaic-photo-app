@@ -22,6 +22,10 @@ const els = {
   mode: document.getElementById('mode'),
   matchTolerance: document.getElementById('matchTolerance'),
   adjustTolerance: document.getElementById('adjustTolerance'),
+  excludeColorEnabled: document.getElementById('excludeColorEnabled'),
+  excludeColor: document.getElementById('excludeColor'),
+  excludeTolerance: document.getElementById('excludeTolerance'),
+  patchBlend: document.getElementById('patchBlend'),
   maskCanvas: document.getElementById('maskCanvas'),
   brushSize: document.getElementById('brushSize'),
   clearMask: document.getElementById('clearMask'),
@@ -100,6 +104,41 @@ function rgbToHsv(r, g, b) {
   const s = max === 0 ? 0 : d / max;
   const v = max;
   return { h, s, v };
+}
+
+function hsvToRgb(h, s, v) {
+  const c = v * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = v - c;
+  let rr = 0, gg = 0, bb = 0;
+  if (h < 60) [rr, gg, bb] = [c, x, 0];
+  else if (h < 120) [rr, gg, bb] = [x, c, 0];
+  else if (h < 180) [rr, gg, bb] = [0, c, x];
+  else if (h < 240) [rr, gg, bb] = [0, x, c];
+  else if (h < 300) [rr, gg, bb] = [x, 0, c];
+  else [rr, gg, bb] = [c, 0, x];
+  return [
+    Math.round((rr + m) * 255),
+    Math.round((gg + m) * 255),
+    Math.round((bb + m) * 255),
+  ];
+}
+
+function hexToRgb(hex) {
+  const normalized = hex.replace('#', '');
+  return [
+    parseInt(normalized.slice(0, 2), 16),
+    parseInt(normalized.slice(2, 4), 16),
+    parseInt(normalized.slice(4, 6), 16),
+  ];
+}
+
+function colorDistance(a, b) {
+  return Math.sqrt(
+    (a[0] - b[0]) ** 2 +
+    (a[1] - b[1]) ** 2 +
+    (a[2] - b[2]) ** 2
+  );
 }
 
 function loadImage(file) {
@@ -319,50 +358,131 @@ function pickPhoto(tileStats, settings) {
   return best;
 }
 
-function maskAllowsMosaic(x, y, w, h) {
-  if (!state.mask) return true;
-  let includeVotes = 0;
-  let excludeVotes = 0;
-  const sx = Math.max(0, Math.floor(x));
-  const sy = Math.max(0, Math.floor(y));
-  const ex = Math.min(els.outputCanvas.width - 1, Math.floor(x + w));
-  const ey = Math.min(els.outputCanvas.height - 1, Math.floor(y + h));
+function createDecisionMap(settings, masterCtx) {
+  const mapW = Math.max(80, Math.round(settings.pxW / 32));
+  const mapH = Math.max(80, Math.round(settings.pxH / 32));
+  let map = new Uint8Array(mapW * mapH);
+  const excludeEnabled = els.excludeColorEnabled.checked;
+  const excludedColor = hexToRgb(els.excludeColor.value);
+  const excludeTolerance = parseInt(els.excludeTolerance.value, 10);
 
-  for (let py = sy; py < ey; py += 4) {
-    for (let px = sx; px < ex; px += 4) {
-      const mx = Math.floor((px / els.outputCanvas.width) * els.maskCanvas.width);
-      const my = Math.floor((py / els.outputCanvas.height) * els.maskCanvas.height);
-      const val = state.mask[my * els.maskCanvas.width + mx];
-      if (val === 1) includeVotes++;
-      if (val === 2) excludeVotes++;
+  for (let my = 0; my < mapH; my++) {
+    for (let mx = 0; mx < mapW; mx++) {
+      const x = Math.floor((mx / mapW) * settings.pxW);
+      const y = Math.floor((my / mapH) * settings.pxH);
+      const w = Math.max(1, Math.floor(settings.pxW / mapW));
+      const h = Math.max(1, Math.floor(settings.pxH / mapH));
+      const tileStats = getTileStatsFromMaster(x, y, w, h, masterCtx);
+      let allow = 1;
+      if (excludeEnabled && colorDistance(tileStats.avgColor, excludedColor) <= excludeTolerance) {
+        allow = 0;
+      }
+
+      if (state.mask) {
+        let includeVotes = 0;
+        let excludeVotes = 0;
+        for (let py = y; py < Math.min(settings.pxH, y + h); py += 3) {
+          for (let px = x; px < Math.min(settings.pxW, x + w); px += 3) {
+            const sx = Math.floor((px / settings.pxW) * els.maskCanvas.width);
+            const sy = Math.floor((py / settings.pxH) * els.maskCanvas.height);
+            const val = state.mask[sy * els.maskCanvas.width + sx];
+            if (val === 1) includeVotes++;
+            if (val === 2) excludeVotes++;
+          }
+        }
+        if (includeVotes > excludeVotes) allow = 1;
+        else if (excludeVotes > includeVotes) allow = 0;
+      }
+
+      map[my * mapW + mx] = allow;
     }
   }
 
-  if (includeVotes === 0 && excludeVotes === 0) return true;
+  const blendPasses = parseInt(els.patchBlend.value, 10);
+  for (let pass = 0; pass < blendPasses; pass++) {
+    map = smoothBinaryMap(map, mapW, mapH);
+  }
+
+  return { map, mapW, mapH };
+}
+
+function smoothBinaryMap(source, w, h) {
+  const out = new Uint8Array(source.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let ones = 0;
+      let total = 0;
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          const nx = x + ox;
+          const ny = y + oy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          total++;
+          if (source[ny * w + nx] === 1) ones++;
+        }
+      }
+      out[y * w + x] = ones >= Math.ceil(total / 2) ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+function mapAllowsMosaic(x, y, w, h, decision) {
+  if (!decision) return true;
+  let includeVotes = 0;
+  let excludeVotes = 0;
+
+  const sx = Math.max(0, Math.floor((x / els.outputCanvas.width) * decision.mapW));
+  const sy = Math.max(0, Math.floor((y / els.outputCanvas.height) * decision.mapH));
+  const ex = Math.min(decision.mapW - 1, Math.floor(((x + w) / els.outputCanvas.width) * decision.mapW));
+  const ey = Math.min(decision.mapH - 1, Math.floor(((y + h) / els.outputCanvas.height) * decision.mapH));
+
+  for (let py = sy; py <= ey; py++) {
+    for (let px = sx; px <= ex; px++) {
+      const val = decision.map[py * decision.mapW + px];
+      if (val === 1) includeVotes++;
+      else excludeVotes++;
+    }
+  }
   return includeVotes >= excludeVotes;
 }
 
 function drawPhotoAdjusted(photo, dx, dy, dw, dh, targetStats, adjustTolerance) {
-  outputCtx.save();
-  outputCtx.drawImage(photo.canvas, dx, dy, dw, dh);
-
+  const tile = document.createElement('canvas');
+  tile.width = Math.max(1, Math.round(dw));
+  tile.height = Math.max(1, Math.round(dh));
+  const tileCtx = tile.getContext('2d');
+  tileCtx.drawImage(photo.canvas, 0, 0, tile.width, tile.height);
+  const imageData = tileCtx.getImageData(0, 0, tile.width, tile.height);
+  const data = imageData.data;
   const satDiff = targetStats.saturation - photo.stats.saturation;
   const briDiff = targetStats.brightness - photo.stats.brightness;
   const maxAdj = adjustTolerance / 100;
-  const satAdj = clamp(satDiff, -maxAdj, maxAdj);
-  const briAdj = clamp(briDiff, -maxAdj, maxAdj);
+  const satFactor = clamp(1 + satDiff * 2.5, 1 - maxAdj * 1.4, 1 + maxAdj * 1.6);
+  const briFactor = clamp(1 + briDiff * 2.0, 1 - maxAdj * 1.2, 1 + maxAdj * 1.3);
+  const target = targetStats.avgColor;
+  const source = photo.stats.avgColor;
+  const channelGain = [
+    clamp(target[0] / Math.max(1, source[0]), 1 - maxAdj, 1 + maxAdj),
+    clamp(target[1] / Math.max(1, source[1]), 1 - maxAdj, 1 + maxAdj),
+    clamp(target[2] / Math.max(1, source[2]), 1 - maxAdj, 1 + maxAdj),
+  ];
+  const colorBlend = 0.35 + maxAdj * 0.45;
 
-  outputCtx.fillStyle = briAdj > 0 ? `rgba(255,255,255,${briAdj * 0.55})` : `rgba(0,0,0,${Math.abs(briAdj) * 0.6})`;
-  outputCtx.fillRect(dx, dy, dw, dh);
-
-  if (Math.abs(satAdj) > 0.01) {
-    const overlay = satAdj > 0
-      ? `rgba(${targetStats.avgColor[0]},${targetStats.avgColor[1]},${targetStats.avgColor[2]},${Math.abs(satAdj) * 0.25})`
-      : `rgba(128,128,128,${Math.abs(satAdj) * 0.22})`;
-    outputCtx.fillStyle = overlay;
-    outputCtx.fillRect(dx, dy, dw, dh);
+  for (let i = 0; i < data.length; i += 4) {
+    const hsv = rgbToHsv(data[i], data[i + 1], data[i + 2]);
+    hsv.s = clamp(hsv.s * satFactor, 0, 1);
+    hsv.v = clamp(hsv.v * briFactor, 0, 1);
+    const [rr, gg, bb] = hsvToRgb(hsv.h, hsv.s, hsv.v);
+    const cr = clamp(rr * channelGain[0], 0, 255);
+    const cg = clamp(gg * channelGain[1], 0, 255);
+    const cb = clamp(bb * channelGain[2], 0, 255);
+    data[i] = Math.round(cr * (1 - colorBlend) + target[0] * colorBlend);
+    data[i + 1] = Math.round(cg * (1 - colorBlend) + target[1] * colorBlend);
+    data[i + 2] = Math.round(cb * (1 - colorBlend) + target[2] * colorBlend);
   }
-  outputCtx.restore();
+  tileCtx.putImageData(imageData, 0, 0);
+  outputCtx.drawImage(tile, dx, dy, dw, dh);
 }
 
 async function generateMosaic() {
@@ -384,6 +504,7 @@ async function generateMosaic() {
   masterCanvas.height = settings.pxH;
   const masterCtx = masterCanvas.getContext('2d');
   masterCtx.drawImage(state.masterImage, 0, 0, settings.pxW, settings.pxH);
+  const decision = createDecisionMap(settings, masterCtx);
 
   let y = 0;
   let tiles = 0;
@@ -402,7 +523,7 @@ async function generateMosaic() {
       const w = Math.min(tileW, settings.pxW - x);
       const h = Math.min(rowH, settings.pxH - y);
 
-      if (maskAllowsMosaic(x, y, w, h)) {
+      if (mapAllowsMosaic(x, y, w, h, decision)) {
         const tileStats = getTileStatsFromMaster(x, y, w, h, masterCtx);
         const photo = pickPhoto(tileStats, settings);
         if (photo) {
@@ -450,6 +571,7 @@ function downloadOutput() {
 
 function initMaskPainting() {
   let painting = false;
+  let lastPoint = null;
 
   const toLocal = (e) => {
     const rect = els.maskCanvas.getBoundingClientRect();
@@ -460,19 +582,35 @@ function initMaskPainting() {
 
   els.maskCanvas.addEventListener('pointerdown', (e) => {
     if (!state.mask) return;
+    els.maskCanvas.setPointerCapture(e.pointerId);
     painting = true;
     const { x, y } = toLocal(e);
+    lastPoint = { x, y };
     paintMask(x, y);
   });
 
   els.maskCanvas.addEventListener('pointermove', (e) => {
     if (!painting || !state.mask) return;
     const { x, y } = toLocal(e);
-    paintMask(x, y);
+    if (lastPoint) {
+      const dx = x - lastPoint.x;
+      const dy = y - lastPoint.y;
+      const dist = Math.max(Math.abs(dx), Math.abs(dy));
+      const steps = Math.max(1, Math.ceil(dist / 2));
+      for (let i = 1; i <= steps; i++) {
+        const ix = Math.round(lastPoint.x + (dx * i) / steps);
+        const iy = Math.round(lastPoint.y + (dy * i) / steps);
+        paintMask(ix, iy);
+      }
+    } else {
+      paintMask(x, y);
+    }
+    lastPoint = { x, y };
   });
 
   window.addEventListener('pointerup', () => {
     painting = false;
+    lastPoint = null;
   });
 }
 

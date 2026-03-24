@@ -18,6 +18,8 @@ Client-side web app for generating a printable photo mosaic.
   - Use all photos (balanced reuse)
   - Use best matches only (respecting match tolerance)
 - Adjustment tolerance controls how much brightness/saturation/color can be nudged to improve match.
+- Optional master-color exclusion (with tolerance) to keep chosen colors as original master pixels.
+- Patch blending control smooths isolated include/exclude islands for cleaner regions.
 - Output reporting includes used/unused source images and counts.
 
 ## Run
